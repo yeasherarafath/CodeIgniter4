@@ -278,6 +278,45 @@ final class UpdateTest extends CIUnitTestCase
         ];
     }
 
+    /**
+     * @see https://github.com/codeigniter4/CodeIgniter4/issues/10599
+     */
+    public function testUpdateBatchWithMixedValueTypesInColumn(): void
+    {
+        if (in_array($this->db->DBDriver, ['OCI8', 'SQLSRV'], true)) {
+            $this->markTestSkipped($this->db->DBDriver . ' does not support values of different types in the same batch column.');
+        }
+
+        $table = 'type_test';
+
+        $builder = $this->db->table($table);
+        $builder->truncate();
+
+        for ($i = 1; $i < 3; $i++) {
+            $builder->insert([
+                'type_varchar'  => 'test' . $i,
+                'type_char'     => 'char' . $i,
+                'type_text'     => 'text',
+                'type_smallint' => 32767,
+                'type_integer'  => 2_147_483_647,
+                'type_bigint'   => 9_223_372_036_854_775_807,
+                'type_float'    => 10.1,
+                'type_numeric'  => 123.23,
+                'type_date'     => '2023-12-0' . $i,
+                'type_datetime' => '2023-12-21 12:00:00',
+            ]);
+        }
+
+        $affectedRows = $this->db->table($table)->updateBatch([
+            ['type_varchar' => 'test1', 'type_text' => 'Example'],
+            ['type_varchar' => 'test2', 'type_text' => 587],
+        ], 'type_varchar');
+
+        $this->assertSame(2, $affectedRows);
+        $this->seeInDatabase($table, ['type_varchar' => 'test1', 'type_text' => 'Example']);
+        $this->seeInDatabase($table, ['type_varchar' => 'test2', 'type_text' => '587']);
+    }
+
     public function testUpdateWithWhereSameColumn(): void
     {
         $this->db->table('user')->update(['country' => 'CA'], ['country' => 'US']);

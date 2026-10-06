@@ -395,20 +395,60 @@ class Builder extends BaseBuilder
         if (isset($this->QBOptions['setQueryAsData'])) {
             $data = $this->QBOptions['setQueryAsData'];
         } else {
-            $data = implode(
-                " UNION ALL\n",
-                array_map(
-                    static fn ($value): string => 'SELECT ' . implode(', ', array_map(
-                        static fn ($key, $index): string => $index . ' ' . $key,
-                        $keys,
-                        $value,
-                    )),
-                    $values,
-                ),
-            ) . "\n";
+            $columns = [];
+
+            foreach ($this->QBOptions['updateFields'] ?? [] as $column => $value) {
+                if (! $value instanceof RawSql) {
+                    $columns[$value] ??= $column;
+                }
+            }
+
+            foreach ($this->QBOptions['constraints'] ?? [] as $value) {
+                if (! $value instanceof RawSql) {
+                    $columns[$value] ??= $value;
+                }
+            }
+
+            $data = $this->compileBatchData($table, $keys, $values, $columns);
         }
 
         return str_replace('{:_table_:}', $data, $sql);
+    }
+
+    /**
+     * Compiles the batch data rows into a UNION ALL query.
+     *
+     * Each value is cast to the type of the table column it is assigned to or
+     * compared with. Otherwise, PostgreSQL resolves the column types of the
+     * UNION ALL from the values themselves, which fails when rows contain
+     * values of different types, e.g., a string and an int for a TEXT column.
+     *
+     * @param string                 $table   Protected table name
+     * @param list<string>           $keys    QBKeys
+     * @param list<list<int|string>> $values  QBSet
+     * @param array<string, string>  $columns Protected data column name => protected table column name
+     */
+    private function compileBatchData(string $table, array $keys, array $values, array $columns): string
+    {
+        $types = [];
+
+        foreach ($keys as $key) {
+            $types[$key] = isset($columns[$key]) ? $this->getFieldType($table, $columns[$key]) : null;
+        }
+
+        $that = $this;
+
+        return implode(
+            " UNION ALL\n",
+            array_map(
+                static fn ($value): string => 'SELECT ' . implode(', ', array_map(
+                    static fn ($key, $index): string => $that->cast((string) $index, $types[$key]) . ' ' . $key,
+                    $keys,
+                    $value,
+                )),
+                $values,
+            ),
+        ) . "\n";
     }
 
     /**
@@ -613,17 +653,15 @@ class Builder extends BaseBuilder
         if (isset($this->QBOptions['setQueryAsData'])) {
             $data = $this->QBOptions['setQueryAsData'];
         } else {
-            $data = implode(
-                " UNION ALL\n",
-                array_map(
-                    static fn ($value): string => 'SELECT ' . implode(', ', array_map(
-                        static fn ($key, $index): string => $index . ' ' . $key,
-                        $keys,
-                        $value,
-                    )),
-                    $values,
-                ),
-            ) . "\n";
+            $columns = [];
+
+            foreach ($this->QBOptions['constraints'] ?? [] as $key => $value) {
+                if (is_string($key) && ! $value instanceof RawSql) {
+                    $columns[$value] ??= $key;
+                }
+            }
+
+            $data = $this->compileBatchData($table, $keys, $values, $columns);
         }
 
         return str_replace('{:_table_:}', $data, $sql);

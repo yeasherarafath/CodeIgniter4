@@ -14,10 +14,12 @@ declare(strict_types=1);
 namespace CodeIgniter\Database\Builder;
 
 use CodeIgniter\Database\BaseBuilder;
+use CodeIgniter\Database\Postgre\Builder as PostgreBuilder;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\Mock\MockConnection;
 use CodeIgniter\Test\Mock\MockQuery;
 use PHPUnit\Framework\Attributes\Group;
+use stdClass;
 
 /**
  * @internal
@@ -168,5 +170,44 @@ final class DeleteTest extends CIUnitTestCase
 
         $this->assertStringContainsString("IN ('anything'' OR ''1''=''1','Ahmadinejad')", $query->getQuery());
         $this->assertStringNotContainsString("IN anything' OR '1'='1", $query->getQuery());
+    }
+
+    public function testPostgreDeleteBatchCastsValuesToColumnTypes(): void
+    {
+        $db = new class ([]) extends MockConnection {
+            /**
+             * @return list<stdClass>
+             */
+            protected function _fieldData(string $table): array
+            {
+                return [
+                    (object) ['name' => 'id', 'type' => 'integer'],
+                    (object) ['name' => 'name', 'type' => 'text'],
+                ];
+            }
+        };
+
+        $builder = new PostgreBuilder('jobs', $db);
+
+        $sql = $builder->testMode()
+            ->setData([
+                ['userid' => '1', 'name' => 'Derek J', 'unused' => 'Unused'],
+                ['userid' => 2, 'name' => 'Ahmadinejad', 'unused' => 'Unused'],
+            ], null, 'data')
+            ->onConstraint(['id' => 'userid', 'name'])
+            ->deleteBatch();
+
+        $expected = <<<'EOF'
+            DELETE FROM "jobs"
+            USING (
+            SELECT 'Derek J' "name", 'Unused' "unused", CAST('1' AS INTEGER) "userid" UNION ALL
+            SELECT 'Ahmadinejad' "name", 'Unused' "unused", CAST(2 AS INTEGER) "userid"
+            ) "data"
+            WHERE "jobs"."id" = CAST("data"."userid" AS INTEGER) AND "jobs"."name" = "data"."name"
+            EOF;
+
+        $this->assertIsArray($sql);
+        $this->assertCount(1, $sql);
+        $this->assertSame($expected, rtrim($sql[0]));
     }
 }

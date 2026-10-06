@@ -15,10 +15,12 @@ namespace CodeIgniter\Database\Builder;
 
 use CodeIgniter\Database\BaseBuilder;
 use CodeIgniter\Database\Exceptions\DatabaseException;
+use CodeIgniter\Database\Postgre\Builder as PostgreBuilder;
 use CodeIgniter\Test\CIUnitTestCase;
 use CodeIgniter\Test\Mock\MockConnection;
 use CodeIgniter\Test\Mock\MockQuery;
 use PHPUnit\Framework\Attributes\Group;
+use stdClass;
 
 /**
  * @internal
@@ -468,5 +470,41 @@ final class UpdateTest extends CIUnitTestCase
 
         $this->assertSame($expectedSQL, str_replace("\n", ' ', $builder->getCompiledUpdate()));
         $this->assertSame($expectedBinds, $builder->getBinds());
+    }
+
+    public function testPostgreUpdateBatchCastsValuesToColumnTypes(): void
+    {
+        $db = new class ([]) extends MockConnection {
+            /**
+             * @return list<stdClass>
+             */
+            protected function _fieldData(string $table): array
+            {
+                return [
+                    (object) ['name' => 'id', 'type' => 'integer'],
+                    (object) ['name' => 'value', 'type' => 'text'],
+                ];
+            }
+        };
+
+        $builder = new PostgreBuilder('settings', $db);
+
+        $sql = $builder->testMode()->updateBatch([
+            ['id' => 1, 'value' => 'Example'],
+            ['id' => 2, 'value' => 587],
+        ], 'id');
+
+        $expected = <<<'EOF'
+            UPDATE "settings"
+            SET
+            "value" = CAST(_u."value" AS TEXT)
+            FROM (
+            SELECT CAST(1 AS INTEGER) "id", CAST('Example' AS TEXT) "value" UNION ALL
+            SELECT CAST(2 AS INTEGER) "id", CAST(587 AS TEXT) "value"
+            ) _u
+            WHERE "settings"."id" = CAST(_u."id" AS INTEGER)
+            EOF;
+
+        $this->assertSame([$expected], $sql);
     }
 }
